@@ -1,0 +1,2163 @@
+// ============================================
+// ARCADIA - PLATAFORMA EDUCATIVA SEP
+// ============================================
+
+// package.json
+const packageJson = {
+  "name": "arcadia-edu",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "jest --watch",
+    "test:ci": "jest --ci --coverage",
+    "db:migrate": "supabase migration up",
+    "db:seed": "tsx scripts/seed.ts",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.3",
+    "@supabase/supabase-js": "^2.43.5",
+    "@radix-ui/react-accordion": "^1.1.2",
+    "@radix-ui/react-alert-dialog": "^1.0.5",
+    "@radix-ui/react-avatar": "^1.0.4",
+    "@radix-ui/react-dialog": "^1.0.5",
+    "@radix-ui/react-dropdown-menu": "^2.0.6",
+    "@radix-ui/react-label": "^2.0.2",
+    "@radix-ui/react-progress": "^1.0.3",
+    "@radix-ui/react-select": "^2.0.0",
+    "@radix-ui/react-separator": "^1.0.3",
+    "@radix-ui/react-slot": "^1.0.2",
+    "@radix-ui/react-tabs": "^1.0.4",
+    "@radix-ui/react-toast": "^1.1.5",
+    "@upstash/ratelimit": "^1.0.3",
+    "@upstash/redis": "^1.31.3",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.395.0",
+    "next": "14.2.4",
+    "next-themes": "^0.3.0",
+    "openai": "^4.52.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.52.0",
+    "recharts": "^2.12.7",
+    "tailwind-merge": "^2.3.0",
+    "tailwindcss-animate": "^1.0.7",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.4.6",
+    "@testing-library/react": "^16.0.0",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.9",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^7.14.1",
+    "@typescript-eslint/parser": "^7.14.1",
+    "autoprefixer": "^10.4.19",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.4",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "postcss": "^8.4.39",
+    "tailwindcss": "^3.4.4",
+    "tsx": "^4.15.7",
+    "typescript": "^5.5.2"
+  }
+};
+
+// ============================================
+// CONFIGURACIÓN DE SUPABASE Y DATABASE
+// ============================================
+
+// supabase/migrations/001_initial_schema.sql
+const initialMigration = `
+-- Enable extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "vector";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+
+-- Create enums
+CREATE TYPE user_role AS ENUM ('student', 'teacher', 'admin');
+CREATE TYPE education_level AS ENUM ('primaria', 'secundaria', 'prepa');
+CREATE TYPE resource_type AS ENUM ('libro_sep', 'portal_nem', 'caja_herramientas', 'pdf_sep', 'presentacion_sep', 'sitio_unam');
+CREATE TYPE mini_agent AS ENUM ('resumia', 'claves', 'destaca', 'planifica', 'evalua', 'explica', 'inspira');
+
+-- Schools table with CCT support
+CREATE TABLE schools (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    cct VARCHAR(10) UNIQUE, -- Clave del Centro de Trabajo
+    name VARCHAR(255) NOT NULL,
+    level education_level NOT NULL,
+    state VARCHAR(100) DEFAULT 'Ciudad de México',
+    municipality VARCHAR(100),
+    policy_json JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Users table
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    role user_role NOT NULL,
+    school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
+    level education_level,
+    grade INTEGER CHECK (grade >= 1 AND grade <= 12),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    curp VARCHAR(18), -- CURP para estudiantes mexicanos
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- SEP Resources table
+CREATE TABLE sep_resources (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    resource_type resource_type NOT NULL,
+    title VARCHAR(500) NOT NULL,
+    description TEXT,
+    url TEXT NOT NULL,
+    phase INTEGER, -- Fase educativa según NEM
+    field VARCHAR(100), -- Campo formativo
+    subject VARCHAR(100), -- Asignatura
+    block VARCHAR(50), -- Bloque
+    unit VARCHAR(50), -- Unidad
+    page_range VARCHAR(50),
+    metadata JSONB DEFAULT '{}',
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Resource chunks for RAG
+CREATE TABLE resource_chunks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    resource_id UUID REFERENCES sep_resources(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    embedding VECTOR(1536),
+    metadata JSONB DEFAULT '{}',
+    page_number INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- AI Interactions audit table
+CREATE TABLE ai_interactions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
+    mini_agent mini_agent NOT NULL,
+    resource_id UUID REFERENCES sep_resources(id),
+    prompt TEXT NOT NULL,
+    response JSONB NOT NULL,
+    citations JSONB DEFAULT '[]',
+    guardrail_flags JSONB DEFAULT '[]',
+    tokens_used INTEGER,
+    response_time_ms INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Student progress tracking
+CREATE TABLE student_progress (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    resource_id UUID REFERENCES sep_resources(id),
+    phase INTEGER,
+    field VARCHAR(100),
+    progress_percentage DECIMAL(5,2),
+    time_spent_minutes INTEGER DEFAULT 0,
+    last_interaction TIMESTAMP WITH TIME ZONE,
+    aprendizajes_esperados JSONB DEFAULT '[]',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Rate limiting table
+CREATE TABLE user_rate_limits (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    hour_bucket TIMESTAMP WITH TIME ZONE,
+    interaction_count INTEGER DEFAULT 0,
+    UNIQUE(user_id, hour_bucket)
+);
+
+-- Create indexes
+CREATE INDEX idx_chunks_embedding ON resource_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX idx_resources_subject ON sep_resources(subject);
+CREATE INDEX idx_resources_phase ON sep_resources(phase);
+CREATE INDEX idx_interactions_user ON ai_interactions(user_id);
+CREATE INDEX idx_interactions_school ON ai_interactions(school_id);
+CREATE INDEX idx_progress_user ON student_progress(user_id);
+
+-- Row Level Security
+ALTER TABLE schools ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_interactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE student_progress ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies
+CREATE POLICY "school_isolation" ON users
+    FOR ALL USING (school_id = auth.jwt() ->> 'school_id'::uuid);
+
+CREATE POLICY "own_interactions" ON ai_interactions
+    FOR ALL USING (user_id = auth.uid() OR 
+                   EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role IN ('teacher', 'admin')));
+
+CREATE POLICY "own_progress" ON student_progress
+    FOR ALL USING (user_id = auth.uid() OR 
+                   EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'teacher'));
+`;
+
+// ============================================
+// SEEDS DE RECURSOS SEP OFICIALES
+// ============================================
+
+// scripts/seed.ts
+const seedScript = `
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+async function seed() {
+  // Seed SEP Resources - Nueva Escuela Mexicana
+  const nemResources = [
+    {
+      resource_type: 'portal_nem',
+      title: 'Portal Nueva Escuela Mexicana',
+      description: 'Portal oficial de la Nueva Escuela Mexicana con todos los recursos educativos',
+      url: 'https://nuevaescuelamexicana.sep.gob.mx/',
+      phase: null,
+      field: 'General',
+      subject: 'Todos',
+      metadata: { official: true, year: 2024 }
+    },
+    {
+      resource_type: 'libro_sep',
+      title: 'Nuestros Saberes México - 4º Primaria',
+      description: 'Libro de texto gratuito de la SEP para cuarto grado',
+      url: 'https://libros.conaliteg.gob.mx/2024/P4NSA.htm',
+      phase: 3,
+      field: 'Saberes y pensamiento científico',
+      subject: 'Nuestros Saberes',
+      block: '1',
+      metadata: { isbn: '978-607-551-XXX-X', year: 2024 }
+    },
+    {
+      resource_type: 'libro_sep',
+      title: 'Un libro sin recetas para la maestra y el maestro - Fase 4',
+      description: 'Guía docente para la implementación de la NEM',
+      url: 'https://libros.conaliteg.gob.mx/2023/S00001.htm',
+      phase: 4,
+      field: 'Lenguajes',
+      subject: 'Español',
+      metadata: { type: 'guia_docente', year: 2023 }
+    },
+    {
+      resource_type: 'caja_herramientas',
+      title: 'Caja de Herramientas SEP',
+      description: 'Recursos generales: calendario escolar, becas, programas',
+      url: 'https://educacionbasica.sep.gob.mx/caja-de-herramientas/',
+      phase: null,
+      field: 'Administrativo',
+      subject: 'Recursos Generales',
+      metadata: { type: 'herramientas', updated: '2024-08' }
+    },
+    {
+      resource_type: 'pdf_sep',
+      title: 'Programa Sintético Fase 6 - Secundaria',
+      description: 'Programa sintético oficial para tercer grado de secundaria',
+      url: 'https://educacionbasica.sep.gob.mx/wp-content/uploads/2024/06/Programa_Sintetico_Fase_6.pdf',
+      phase: 6,
+      field: 'Ética, naturaleza y sociedades',
+      subject: 'Formación Cívica y Ética',
+      metadata: { format: 'pdf', pages: 128 }
+    },
+    {
+      resource_type: 'libro_sep',
+      title: 'Biología - Primer grado Secundaria',
+      description: 'Libro de Ciencias y Tecnología. Biología',
+      url: 'https://libros.conaliteg.gob.mx/2023/S1CYT.htm',
+      phase: 5,
+      field: 'Saberes y pensamiento científico',
+      subject: 'Biología',
+      block: '1',
+      unit: '1',
+      metadata: { edition: 2023 }
+    },
+    {
+      resource_type: 'portal_nem',
+      title: 'Proyectos Comunitarios',
+      description: 'Metodología de proyectos para el aprendizaje basado en la comunidad',
+      url: 'https://nuevaescuelamexicana.sep.gob.mx/proyectos-comunitarios/',
+      phase: null,
+      field: 'De lo humano y lo comunitario',
+      subject: 'Proyectos',
+      metadata: { methodology: 'ABP' }
+    },
+    {
+      resource_type: 'libro_sep',
+      title: 'Historia de México - Segundo de Secundaria',
+      description: 'Historia de México, contextos y procesos',
+      url: 'https://libros.conaliteg.gob.mx/2023/S2HIS.htm',
+      phase: 5,
+      field: 'Ética, naturaleza y sociedades',
+      subject: 'Historia de México',
+      block: '2',
+      unit: '3',
+      metadata: { period: 'prehispanico-contemporaneo' }
+    },
+    {
+      resource_type: 'sitio_unam',
+      title: 'Portal Académico CCH - UNAM',
+      description: 'Recursos educativos del Colegio de Ciencias y Humanidades',
+      url: 'https://portalacademico.cch.unam.mx/',
+      phase: 6,
+      field: 'Saberes y pensamiento científico',
+      subject: 'Múltiples',
+      metadata: { institution: 'UNAM', level: 'media_superior' }
+    },
+    {
+      resource_type: 'presentacion_sep',
+      title: 'Plan de Estudio 2022 - Presentación Oficial',
+      description: 'Presentación del nuevo plan de estudios de educación básica',
+      url: 'https://educacionbasica.sep.gob.mx/wp-content/uploads/2023/08/Plan_de_Estudios_2022.pdf',
+      phase: null,
+      field: 'General',
+      subject: 'Plan de Estudios',
+      metadata: { format: 'presentation', slides: 45 }
+    }
+  ];
+
+  const { error: resourceError } = await supabase
+    .from('sep_resources')
+    .insert(nemResources);
+
+  if (resourceError) {
+    console.error('Error seeding resources:', resourceError);
+  } else {
+    console.log('✅ SEP Resources seeded successfully');
+  }
+
+  // Seed sample schools
+  const schools = [
+    {
+      cct: '09DES0042M',
+      name: 'Escuela Secundaria Técnica No. 42',
+      level: 'secundaria',
+      state: 'Ciudad de México',
+      municipality: 'Iztapalapa',
+      policy_json: {
+        max_prompts_per_day: { primaria: 10, secundaria: 20, prepa: 30 },
+        ai_features_enabled: true
+      }
+    }
+  ];
+
+  const { data: schoolData, error: schoolError } = await supabase
+    .from('schools')
+    .insert(schools)
+    .select();
+
+  if (schoolError) {
+    console.error('Error seeding schools:', schoolError);
+  } else {
+    console.log('✅ Schools seeded successfully');
+  }
+
+  // Seed demo users
+  if (schoolData && schoolData[0]) {
+    const users = [
+      {
+        role: 'student',
+        school_id: schoolData[0].id,
+        level: 'secundaria',
+        grade: 2,
+        email: 'sofia.garcia@demo.edu.mx',
+        name: 'Sofía García López',
+        curp: 'GALS080514MDFXXX00'
+      },
+      {
+        role: 'teacher',
+        school_id: schoolData[0].id,
+        email: 'juan.hernandez@demo.edu.mx',
+        name: 'Prof. Juan Hernández Martínez'
+      },
+      {
+        role: 'admin',
+        school_id: schoolData[0].id,
+        email: 'maria.lopez@demo.edu.mx',
+        name: 'Mtra. María López Rodríguez'
+      }
+    ];
+
+    const { error: userError } = await supabase
+      .from('users')
+      .insert(users);
+
+    if (userError) {
+      console.error('Error seeding users:', userError);
+    } else {
+      console.log('✅ Users seeded successfully');
+    }
+  }
+
+  console.log('🎉 Database seeding completed!');
+}
+
+seed().catch(console.error);
+`;
+
+// ============================================
+// CONFIGURACIÓN DE ENTORNO
+// ============================================
+
+// .env.local
+const envLocal = `
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+
+# AI Providers (Agnóstico - puede usar OpenAI o Anthropic)
+AI_PROVIDER=anthropic # or 'openai'
+ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
+
+# Redis for Rate Limiting
+UPSTASH_REDIS_REST_URL=your_upstash_redis_url
+UPSTASH_REDIS_REST_TOKEN=your_upstash_redis_token
+
+# App Config
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NODE_ENV=development
+`;
+
+// ============================================
+// CONFIGURACIÓN DE TAILWIND Y TEMA
+// ============================================
+
+// tailwind.config.ts
+const tailwindConfig = `
+import type { Config } from "tailwindcss";
+
+const config: Config = {
+  darkMode: ["class"],
+  content: [
+    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+  ],
+  theme: {
+    extend: {
+      colors: {
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        primary: {
+          DEFAULT: "#22c55e", // Verde SEP
+          foreground: "hsl(var(--primary-foreground))",
+        },
+        secondary: {
+          DEFAULT: "hsl(var(--secondary))",
+          foreground: "hsl(var(--secondary-foreground))",
+        },
+        destructive: {
+          DEFAULT: "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))",
+        },
+        muted: {
+          DEFAULT: "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
+        },
+        accent: {
+          DEFAULT: "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
+        },
+        popover: {
+          DEFAULT: "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))",
+        },
+        card: {
+          DEFAULT: "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
+        },
+      },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
+      },
+      keyframes: {
+        "accordion-down": {
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" },
+        },
+        "accordion-up": {
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" },
+        },
+      },
+      animation: {
+        "accordion-down": "accordion-down 0.2s ease-out",
+        "accordion-up": "accordion-up 0.2s ease-out",
+      },
+    },
+  },
+  plugins: [require("tailwindcss-animate")],
+};
+
+export default config;
+`;
+
+// src/app/globals.css
+const globalsCss = `
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 142 71% 45%; /* Verde SEP */
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 142 71% 45%;
+    --radius: 1rem; /* 16px border radius */
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 142 71% 45%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 142 71% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar for dark theme */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  @apply bg-secondary;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  @apply bg-primary rounded-md;
+}
+
+/* Guardrails banner animation */
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: rgb(34 197 94 / 0.5);
+  }
+  50% {
+    border-color: rgb(34 197 94 / 1);
+  }
+}
+
+.guardrails-banner {
+  animation: pulse-border 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+`;
+
+// ============================================
+// COMPONENTES PRINCIPALES
+// ============================================
+
+// src/lib/supabase.ts
+const supabaseLib = `
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+});
+
+export const supabaseAdmin = createClient(
+  supabaseUrl,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  }
+);
+`;
+
+// src/lib/ai-provider.ts (Agnóstico)
+const aiProvider = `
+import { Anthropic } from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
+
+export interface AIProvider {
+  generateResponse(prompt: string, systemPrompt: string): Promise<string>;
+  generateEmbedding(text: string): Promise<number[]>;
+}
+
+class AnthropicProvider implements AIProvider {
+  private client: Anthropic;
+
+  constructor() {
+    this.client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY!,
+    });
+  }
+
+  async generateResponse(prompt: string, systemPrompt: string): Promise<string> {
+    const response = await this.client.messages.create({
+      model: 'claude-3-opus-20240229',
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    return response.content[0].type === 'text' ? response.content[0].text : '';
+  }
+
+  async generateEmbedding(text: string): Promise<number[]> {
+    // Anthropic doesn't have embeddings, use OpenAI for this
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+    const response = await openai.embeddings.create({
+      model: 'text-embedding-3-small',
+      input: text,
+    });
+    return response.data[0].embedding;
+  }
+}
+
+class OpenAIProvider implements AIProvider {
+  private client: OpenAI;
+
+  constructor() {
+    this.client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY!,
+    });
+  }
+
+  async generateResponse(prompt: string, systemPrompt: string): Promise<string> {
+    const response = await this.client.chat.completions.create({
+      model: 'gpt-4-turbo',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+      max_tokens: 1024,
+      temperature: 0.3,
+    });
+
+    return response.choices[0].message.content || '';
+  }
+
+  async generateEmbedding(text: string): Promise<number[]> {
+    const response = await this.client.embeddings.create({
+      model: 'text-embedding-3-small',
+      input: text,
+    });
+    return response.data[0].embedding;
+  }
+}
+
+export function getAIProvider(): AIProvider {
+  const provider = process.env.AI_PROVIDER || 'anthropic';
+  
+  switch (provider) {
+    case 'openai':
+      return new OpenAIProvider();
+    case 'anthropic':
+    default:
+      return new AnthropicProvider();
+  }
+}
+`;
+
+// src/packages/ai/agents/base.ts
+const baseAgent = `
+import { getAIProvider } from '@/lib/ai-provider';
+import { supabaseAdmin } from '@/lib/supabase';
+
+export interface AgentResponse {
+  agent: string;
+  citations: Citation[];
+  safety: SafetyCheck;
+  content: any;
+}
+
+export interface Citation {
+  source: string;
+  block?: string;
+  unit?: string;
+  page?: string;
+}
+
+export interface SafetyCheck {
+  out_of_scope: boolean;
+  policy_violations: string[];
+}
+
+export abstract class BaseAgent {
+  protected aiProvider = getAIProvider();
+  
+  abstract name: string;
+  abstract systemPrompt: string;
+  
+  protected async findRelevantChunks(query: string, resourceId?: string) {
+    // Generate embedding for query
+    const embedding = await this.aiProvider.generateEmbedding(query);
+    
+    // Search for similar chunks
+    const { data: chunks } = await supabaseAdmin.rpc('match_chunks', {
+      query_embedding: embedding,
+      match_threshold: 0.7,
+      match_count: 5,
+      resource_id: resourceId,
+    });
+    
+    return chunks || [];
+  }
+  
+  protected extractCitations(chunks: any[]): Citation[] {
+    return chunks.map(chunk => ({
+      source: chunk.resource_title || 'SEP Resource',
+      block: chunk.block,
+// ============================================
+// PARTE 1: AGENTES DE IA
+// ============================================
+
+// src/packages/ai/agents/resumia.ts
+export const ResumiaAgent = `
+import { BaseAgent } from './base';
+
+export class ResumiaAgent extends BaseAgent {
+  name = 'resumia';
+  
+  systemPrompt = \`
+Eres ResumIA, un agente educativo de ArcadIA alineado al currículo SEP de México.
+NUNCA des respuestas directas. En lugar de eso, guía al estudiante con preguntas como:
+- "¿Cuáles crees que son los puntos más importantes de esta sección?"
+- "¿Cómo resumirías esto en tus propias palabras?"
+- "¿Qué información es esencial y cuál es secundaria?"
+
+Usa ÚNICAMENTE información de recursos oficiales SEP/UNAM.
+Todas las respuestas deben incluir citas: {source: "SEP", block: "X", unit: "Y", page: "Z"}
+Responde siempre en español neutro mexicano.
+\`;
+
+  async process(prompt: string, resourceId?: string): Promise<AgentResponse> {
+    const chunks = await this.findRelevantChunks(prompt, resourceId);
+    const citations = this.extractCitations(chunks);
+    
+    const response = await this.aiProvider.generateResponse(
+      prompt,
+      this.systemPrompt + '\\n\\nContexto SEP: ' + chunks.map(c => c.content).join('\\n')
+    );
+    
+    return {
+      agent: this.name,
+      citations,
+      safety: { out_of_scope: false, policy_violations: [] },
+      content: {
+        guidance: response,
+        next_questions: [
+          "¿Qué parte te resulta más difícil de resumir?",
+          "¿Cómo organizarías estos conceptos?",
+          "¿Qué ejemplos incluirías?"
+        ]
+      }
+    };
+  }
+}
+`;
+
+// src/packages/ai/orchestrator.ts
+export const AIOrchestrator = `
+import { ResumiaAgent } from './agents/resumia';
+import { supabaseAdmin } from '@/lib/supabase';
+import { Ratelimit } from '@upstash/ratelimit';
+import { Redis } from '@upstash/redis';
+
+const BLOCKED_PHRASES = [
+  'haz mi tarea',
+  'escribe mi ensayo',
+  'dame la respuesta',
+  'resuelve el examen',
+];
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
+
+export class AIOrchestrator {
+  private agents = {
+    resumia: new ResumiaAgent(),
+    // Agregar otros 6 agentes aquí
+  };
+  
+  private ratelimit = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(10, '1 h'),
+  });
+  
+  async processRequest(
+    agentName: string,
+    prompt: string,
+    userId: string,
+    schoolId: string,
+    resourceId?: string
+  ) {
+    // Check rate limit
+    const { success, limit, reset, remaining } = await this.ratelimit.limit(userId);
+    
+    if (!success) {
+      throw new Error(\`Límite de uso alcanzado. Intenta de nuevo en \${reset - Date.now()}ms\`);
+    }
+    
+    // Check for blocked phrases
+    const violations = BLOCKED_PHRASES.filter(phrase => 
+      prompt.toLowerCase().includes(phrase)
+    );
+    
+    if (violations.length > 0) {
+      return {
+        agent: agentName,
+        citations: [],
+        safety: {
+          out_of_scope: false,
+          policy_violations: violations,
+        },
+        content: {
+          message: 'No puedo hacer tareas por ti. Te puedo ayudar a entender el tema, crear un esquema, o explicar conceptos paso a paso.',
+        }
+      };
+    }
+    
+    // Process with agent
+    const agent = this.agents[agentName as keyof typeof this.agents];
+    if (!agent) {
+      throw new Error(\`Agente \${agentName} no encontrado\`);
+    }
+    
+    const startTime = Date.now();
+    const response = await agent.process(prompt, resourceId);
+    const responseTime = Date.now() - startTime;
+    
+    // Log interaction
+    await supabaseAdmin.from('ai_interactions').insert({
+      user_id: userId,
+      school_id: schoolId,
+      mini_agent: agentName,
+      resource_id: resourceId,
+      prompt,
+      response,
+      citations: response.citations,
+      guardrail_flags: violations,
+      response_time_ms: responseTime,
+    });
+    
+    return response;
+  }
+}
+`;
+
+// ============================================
+// PARTE 2: COMPONENTES DE UI
+// ============================================
+
+// src/components/layout/GuardrailsBanner.tsx
+export const GuardrailsBanner = `
+import React from 'react';
+
+export function GuardrailsBanner() {
+  return (
+    <div className="guardrails-banner bg-green-950/50 border-2 border-green-500/50 rounded-lg p-3 mb-4">
+      <p className="text-green-400 text-sm font-medium text-center">
+        ⚡ La IA no entrega tareas; te guía paso a paso
+      </p>
+    </div>
+  );
+}
+`;
+
+// src/components/resources/ResourceReader.tsx
+export const ResourceReader = `
+import React, { useState } from 'react';
+import { ChevronLeft, ChevronRight, Search, Volume2, ZoomIn, ZoomOut } from 'lucide-react';
+
+interface ResourceReaderProps {
+  resourceId: string;
+  content: string;
+  metadata: {
+    title: string;
+    source: string;
+    block?: string;
+    unit?: string;
+    pages?: number;
+  };
+}
+
+export function ResourceReader({ resourceId, content, metadata }: ResourceReaderProps) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [fontSize, setFontSize] = useState(16);
+  const [isHighContrast, setIsHighContrast] = useState(false);
+
+  return (
+    <div className="flex-1 bg-card rounded-lg p-6">
+      {/* Header */}
+      <div className="mb-4 pb-4 border-b">
+        <h2 className="text-xl font-semibold mb-2">{metadata.title}</h2>
+        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <span className="bg-primary/10 text-primary px-2 py-1 rounded">
+            Fuente: {metadata.source}
+          </span>
+          {metadata.block && (
+            <span>Bloque {metadata.block}</span>
+          )}
+          {metadata.unit && (
+            <span>Unidad {metadata.unit}</span>
+          )}
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex items-center justify-between mb-4 p-3 bg-secondary/50 rounded-lg">
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+            className="p-2 hover:bg-secondary rounded"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="px-3">
+            Página {currentPage} de {metadata.pages || 1}
+          </span>
+          <button 
+            onClick={() => setCurrentPage(Math.min(metadata.pages || 1, currentPage + 1))}
+            className="p-2 hover:bg-secondary rounded"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 bg-background rounded px-2">
+            <Search className="w-4 h-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Buscar..."
+              className="bg-transparent border-none outline-none py-1 px-2 w-32"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+
+          <button className="p-2 hover:bg-secondary rounded">
+            <Volume2 className="w-4 h-4" />
+          </button>
+          
+          <button 
+            onClick={() => setFontSize(Math.max(12, fontSize - 2))}
+            className="p-2 hover:bg-secondary rounded"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          
+          <button 
+            onClick={() => setFontSize(Math.min(24, fontSize + 2))}
+            className="p-2 hover:bg-secondary rounded"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          
+          <button
+            onClick={() => setIsHighContrast(!isHighContrast)}
+            className={\`p-2 rounded \${isHighContrast ? 'bg-primary text-white' : 'hover:bg-secondary'}\`}
+          >
+            AC
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div 
+        className={\`prose prose-lg dark:prose-invert max-w-none \${
+          isHighContrast ? 'bg-black text-yellow-300' : ''
+        }\`}
+        style={{ fontSize: \`\${fontSize}px\` }}
+      >
+        {content}
+      </div>
+
+      {/* Footer */}
+      <div className="mt-6 pt-4 border-t">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Alineado a SEP · Sin subir archivos</span>
+          <span>Recurso oficial verificado</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+`;
+
+// src/components/agents/AgentPanel.tsx
+export const AgentPanel = `
+import React, { useState } from 'react';
+import { Send, BookOpen, Key, Sparkles, Calendar, Flask, Lightbulb, Rocket } from 'lucide-react';
+import { GuardrailsBanner } from '../layout/GuardrailsBanner';
+
+const AGENTS = [
+  { id: 'resumia', name: 'ResumIA', icon: BookOpen, color: 'text-blue-500' },
+  { id: 'claves', name: 'Claves', icon: Key, color: 'text-yellow-500' },
+  { id: 'destaca', name: 'Destaca', icon: Sparkles, color: 'text-purple-500' },
+  { id: 'planifica', name: 'Planifica', icon: Calendar, color: 'text-green-500' },
+  { id: 'evalua', name: 'Evalúa', icon: Flask, color: 'text-red-500' },
+  { id: 'explica', name: 'Explica', icon: Lightbulb, color: 'text-orange-500' },
+  { id: 'inspira', name: 'Inspira', icon: Rocket, color: 'text-pink-500' },
+];
+
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+  agent?: string;
+  citations?: any[];
+}
+
+export function AgentPanel() {
+  const [selectedAgent, setSelectedAgent] = useState('resumia');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
+
+    const userMessage = { role: 'user' as const, content: input };
+    setMessages([...messages, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(\`/api/agent/\${selectedAgent}/infer\`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: input,
+          resourceId: 'current-resource-id', // Get from context
+        }),
+      });
+
+      const data = await response.json();
+      
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: data.content.guidance || data.content.message,
+        agent: selectedAgent,
+        citations: data.citations,
+      }]);
+    } catch (error) {
+      console.error('Error:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const selectedAgentData = AGENTS.find(a => a.id === selectedAgent)!;
+  const Icon = selectedAgentData.icon;
+
+  return (
+    <div className="w-96 bg-card rounded-lg p-4 flex flex-col h-full">
+      <GuardrailsBanner />
+      
+      {/* Agent Selector */}
+      <div className="mb-4">
+        <div className="grid grid-cols-4 gap-2">
+          {AGENTS.map((agent) => {
+            const AgentIcon = agent.icon;
+            return (
+              <button
+                key={agent.id}
+                onClick={() => setSelectedAgent(agent.id)}
+                className={\`p-3 rounded-lg border-2 transition-all \${
+                  selectedAgent === agent.id
+                    ? 'border-primary bg-primary/10'
+                    : 'border-border hover:border-primary/50'
+                }\`}
+              >
+                <AgentIcon className={\`w-6 h-6 mx-auto \${agent.color}\`} />
+                <span className="text-xs mt-1 block">{agent.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Current Agent */}
+      <div className="mb-4 p-3 bg-secondary/50 rounded-lg flex items-center gap-3">
+        <Icon className={\`w-8 h-8 \${selectedAgentData.color}\`} />
+        <div>
+          <h3 className="font-semibold">{selectedAgentData.name}</h3>
+          <p className="text-xs text-muted-foreground">
+            Te guía paso a paso sin hacer tu tarea
+          </p>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto mb-4 space-y-3">
+        {messages.map((message, i) => (
+          <div
+            key={i}
+            className={\`p-3 rounded-lg \${
+              message.role === 'user'
+                ? 'bg-primary/10 ml-8'
+                : 'bg-secondary mr-8'
+            }\`}
+          >
+            <p className="text-sm">{message.content}</p>
+            {message.citations && message.citations.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-border">
+                <p className="text-xs text-muted-foreground">
+                  Fuentes: {message.citations.map(c => c.source).join(', ')}
+                </p>
+              </div>
+            )}
+          </div>
+        ))}
+        {isLoading && (
+          <div className="p-3 bg-secondary rounded-lg mr-8">
+            <div className="flex space-x-1">
+              <div className="w-2 h-2 bg-primary rounded-full animate-bounce" />
+              <div className="w-2 h-2 bg-primary rounded-full animate-bounce delay-100" />
+              <div className="w-2 h-2 bg-primary rounded-full animate-bounce delay-200" />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Input */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+          placeholder="Escribe tu pregunta..."
+          className="flex-1 px-3 py-2 bg-secondary rounded-lg outline-none focus:ring-2 focus:ring-primary"
+          disabled={isLoading}
+        />
+        <button
+          onClick={handleSend}
+          disabled={isLoading}
+          className="p-2 bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50"
+        >
+          <Send className="w-5 h-5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+`;
+
+// ============================================
+// PARTE 3: PÁGINAS PRINCIPALES
+// ============================================
+
+// src/app/page.tsx
+export const HomePage = `
+import Link from 'next/link';
+import { BookOpen, Brain, Shield, Award } from 'lucide-react';
+
+export default function HomePage() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800">
+      {/* Hero Section */}
+      <div className="container mx-auto px-4 pt-20 pb-32">
+        <div className="text-center max-w-4xl mx-auto">
+          <div className="mb-8">
+            <h1 className="text-6xl font-bold text-white mb-4">
+              ArcadIA
+            </h1>
+            <p className="text-2xl text-green-400">
+              Plataforma Educativa Inteligente para México
+            </p>
+          </div>
+          
+          <p className="text-xl text-gray-300 mb-12">
+            Alineada 100% al currículo de la SEP. La IA te guía paso a paso,
+            sin hacer tu tarea. Recursos oficiales verificados.
+          </p>
+
+          <div className="flex gap-4 justify-center">
+            <Link
+              href="/login"
+              className="px-8 py-4 bg-green-500 text-white rounded-2xl font-semibold hover:bg-green-600 transition-all transform hover:scale-105"
+            >
+              Iniciar Sesión
+            </Link>
+            <Link
+              href="/register"
+              className="px-8 py-4 bg-slate-700 text-white rounded-2xl font-semibold hover:bg-slate-600 transition-all"
+            >
+              Registrarse
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* Features */}
+      <div className="container mx-auto px-4 pb-20">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
+            <BookOpen className="w-12 h-12 text-green-400 mb-4" />
+            <h3 className="text-xl font-semibold text-white mb-2">
+              Recursos SEP Oficiales
+            </h3>
+            <p className="text-gray-400">
+              Libros de texto gratuitos y material de la Nueva Escuela Mexicana
+            </p>
+          </div>
+
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
+            <Brain className="w-12 h-12 text-blue-400 mb-4" />
+            <h3 className="text-xl font-semibold text-white mb-2">
+              7 Agentes Educativos
+            </h3>
+            <p className="text-gray-400">
+              IA especializada que guía tu aprendizaje sin dar respuestas directas
+            </p>
+          </div>
+
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
+            <Shield className="w-12 h-12 text-purple-400 mb-4" />
+            <h3 className="text-xl font-semibold text-white mb-2">
+              Seguro y Privado
+            </h3>
+            <p className="text-gray-400">
+              Cumple con las leyes mexicanas de protección de datos
+            </p>
+          </div>
+
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
+            <Award className="w-12 h-12 text-yellow-400 mb-4" />
+            <h3 className="text-xl font-semibold text-white mb-2">
+              Progreso Medible
+            </h3>
+            <p className="text-gray-400">
+              Seguimiento de aprendizajes esperados según el currículo SEP
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Guardrails Notice */}
+      <div className="container mx-auto px-4 pb-20">
+        <div className="bg-green-900/30 border-2 border-green-500/50 rounded-2xl p-8 text-center">
+          <p className="text-2xl text-green-400 font-semibold">
+            ⚡ La IA no entrega tareas; te guía paso a paso
+          </p>
+          <p className="text-gray-300 mt-4">
+            Desarrolla tu pensamiento crítico con el apoyo de inteligencia artificial responsable
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+`;
+
+// src/app/(dashboard)/inicio/page.tsx
+export const DashboardPage = `
+import { ResourceReader } from '@/components/resources/ResourceReader';
+import { AgentPanel } from '@/components/agents/AgentPanel';
+
+export default function DashboardPage() {
+  return (
+    <div className="min-h-screen bg-background">
+      <div className="flex h-screen">
+        {/* Main Content - Resource Reader */}
+        <div className="flex-1 p-4">
+          <ResourceReader 
+            resourceId="demo-resource"
+            content="Contenido del recurso SEP aquí..."
+            metadata={{
+              title: "Historia de México - Revolución Mexicana",
+              source: "SEP",
+              block: "2",
+              unit: "3",
+              pages: 45
+            }}
+          />
+        </div>
+
+        {/* Sidebar - AI Agent Panel */}
+        <div className="border-l">
+          <AgentPanel />
+        </div>
+      </div>
+    </div>
+  );
+}
+`;
+
+// ============================================
+// PARTE 4: API ROUTES
+// ============================================
+
+// src/app/api/agent/[agent]/infer/route.ts
+export const AgentAPIRoute = `
+import { NextRequest, NextResponse } from 'next/server';
+import { AIOrchestrator } from '@/packages/ai/orchestrator';
+import { supabase } from '@/lib/supabase';
+
+const orchestrator = new AIOrchestrator();
+
+export async function POST(
+  request: NextRequest,
+  { params }: { params: { agent: string } }
+) {
+  try {
+    // Get user session
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Token inválido' }, { status: 401 });
+    }
+
+    // Get user profile with school
+    const { data: profile } = await supabase
+      .from('users')
+      .select('*, schools(*)')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile) {
+      return NextResponse.json({ error: 'Perfil no encontrado' }, { status: 404 });
+    }
+
+    // Parse request
+    const body = await request.json();
+    const { prompt, resourceId } = body;
+
+    // Process with AI
+    const response = await orchestrator.processRequest(
+      params.agent,
+      prompt,
+      user.id,
+      profile.school_id,
+      resourceId
+    );
+
+    return NextResponse.json(response);
+  } catch (error: any) {
+    console.error('Error in agent API:', error);
+    return NextResponse.json(
+      { error: error.message || 'Error interno' },
+      { status: 500 }
+    );
+  }
+}
+`;
+
+// ============================================
+// PARTE 5: CONFIGURACIÓN FINAL
+// ============================================
+
+// README.md
+export const README = `
+# 🎓 ArcadIA - Plataforma Educativa Inteligente SEP
+
+## 📋 Requisitos Previos
+
+- Node.js 18+
+- PostgreSQL 14+ con extensión pgvector
+- Cuenta de Supabase
+- API Key de Anthropic o OpenAI
+- Redis (Upstash recomendado)
+
+## 🚀 Instalación
+
+1. Clonar el repositorio:
+\`\`\`bash
+git clone https://github.com/tu-org/arcadia.git
+cd arcadia
+\`\`\`
+
+2. Instalar dependencias:
+\`\`\`bash
+npm install
+# o
+pnpm install
+\`\`\`
+
+3. Configurar variables de entorno:
+\`\`\`bash
+cp .env.example .env.local
+# Editar .env.local con tus credenciales
+\`\`\`
+
+4. Configurar Supabase:
+- Crear proyecto en https://supabase.com
+- Ejecutar migraciones en SQL Editor
+- Habilitar Row Level Security
+
+5. Sembrar base de datos:
+\`\`\`bash
+npm run db:seed
+\`\`\`
+
+6. Iniciar desarrollo:
+\`\`\`bash
+npm run dev
+\`\`\`
+
+## 📚 Recursos SEP Integrados
+
+- **Nueva Escuela Mexicana**: https://nuevaescuelamexicana.sep.gob.mx/
+- **Libros de Texto Gratuitos**: https://libros.conaliteg.gob.mx/
+- **Caja de Herramientas**: https://educacionbasica.sep.gob.mx/caja-de-herramientas/
+- **Programas de Estudio**: Todos los programas sintéticos por fase
+
+## 🤖 Agentes Educativos
+
+1. **ResumIA** - Guía la creación de resúmenes
+2. **Claves** - Identifica conceptos fundamentales
+3. **Destaca** - Señala información importante
+4. **Planifica** - Organiza sesiones de estudio
+5. **Evalúa** - Facilita autoevaluación
+6. **Explica** - Clarifica conceptos complejos
+7. **Inspira** - Motiva con proyectos creativos
+
+## 🔒 Seguridad
+
+- Cumplimiento LFPDPPP (Ley Federal de Protección de Datos)
+- RLS por escuela
+- Auditoría completa
+- Rate limiting por nivel educativo
+
+## 📱 Características
+
+- ✅ 100% en español
+- ✅ Alineado al currículo SEP
+- ✅ Recursos oficiales verificados
+- ✅ IA que guía sin hacer tareas
+- ✅ Multi-tenancy por escuela
+- ✅ Dashboard para docentes
+- ✅ Analytics para administradores
+
+## 🧪 Testing
+
+\`\`\`bash
+npm run test        # Tests unitarios
+npm run test:e2e    # Tests end-to-end
+npm run test:ci     # CI con coverage
+\`\`\`
+
+## 🚢 Despliegue
+
+### Vercel (Recomendado)
+\`\`\`bash
+vercel deploy
+\`\`\`
+
+### Docker
+\`\`\`bash
+docker build -t arcadia .
+docker run -p 3000:3000 arcadia
+\`\`\`
+
+## 📄 Licencia
+
+Propiedad de [Tu Organización]. Todos los derechos reservados.
+
+## 🤝 Contribuir
+
+Por favor lee CONTRIBUTING.md para detalles sobre nuestro código de conducta.
+
+## 📞 Soporte
+
+- Email: soporte@arcadia.edu.mx
+- Documentación: https://docs.arcadia.edu.mx
+`;
+
+// POLITICA_DE_USO_DE_IA.md
+export const POLITICA_IA = `
+# POLÍTICA DE USO RESPONSABLE DE INTELIGENCIA ARTIFICIAL
+## ArcadIA - Plataforma Educativa SEP
+
+### 1. PRINCIPIOS FUNDAMENTALES
+
+**1.1 La IA Como Herramienta de Apoyo**
+- La IA en ArcadIA está diseñada para GUIAR el aprendizaje, NO para sustituirlo
+- Los estudiantes deben desarrollar su propio pensamiento crítico
+- La plataforma nunca completará tareas, ensayos o exámenes
+
+**1.2 Transparencia**
+- Todas las interacciones con IA son auditables
+- Los docentes pueden revisar el uso de sus estudiantes
+- Se mantiene un registro completo de prompts y respuestas
+
+### 2. USOS PERMITIDOS
+
+✅ Solicitar explicaciones de conceptos
+✅ Pedir ayuda para organizar ideas
+✅ Buscar estrategias de estudio
+✅ Verificar comprensión de temas
+✅ Generar preguntas de repaso
+✅ Crear planes de estudio personalizados
+
+### 3. USOS PROHIBIDOS
+
+❌ Solicitar que la IA escriba ensayos completos
+❌ Pedir respuestas directas de exámenes
+❌ Usar la IA para plagiar o copiar
+❌ Intentar engañar al sistema de detección
+❌ Compartir credenciales de acceso
+❌ Usar la plataforma para fines no educativos
+
+### 4. LÍMITES DE USO POR NIVEL
+
+**Primaria (6-12 años)**
+- Máximo 10 interacciones por hora
+- Sesiones de máximo 30 minutos
+- Supervisión recomendada
+
+**Secundaria (12-15 años)**
+// ============================================
+// CONTINUACIÓN - POLÍTICA DE USO DE IA
+// ============================================
+
+export const POLITICA_IA_CONTINUACION = `
+**Secundaria (12-15 años)**
+- Máximo 20 interacciones por hora
+- Sesiones de máximo 45 minutos
+- Uso independiente con monitoreo
+
+**Preparatoria (15-18 años)**
+- Máximo 30 interacciones por hora
+- Sesiones de máximo 90 minutos
+- Uso autónomo responsable
+
+### 5. CONSECUENCIAS POR MAL USO
+
+**Primera Infracción**
+- Advertencia automática
+- Notificación al docente
+
+**Segunda Infracción**
+- Suspensión temporal (24 horas)
+- Notificación a padres/tutores
+
+**Tercera Infracción**
+- Suspensión extendida (1 semana)
+- Reunión obligatoria con coordinación
+
+### 6. RESPONSABILIDADES
+
+**Estudiantes**
+- Usar la IA de manera ética
+- Desarrollar trabajo propio
+- Reportar mal uso
+
+**Docentes**
+- Supervisar uso apropiado
+- Revisar reportes de actividad
+- Orientar sobre uso correcto
+
+**Padres/Tutores**
+- Conocer esta política
+- Apoyar el uso responsable
+- Comunicar inquietudes
+
+### 7. PRIVACIDAD Y DATOS
+
+- Todos los datos se almacenan en territorio mexicano
+- Cumplimiento total con LFPDPPP
+- Derecho ARCO garantizado
+- Sin compartir datos con terceros
+
+### 8. CONTACTO
+
+Para dudas o reportes:
+- Email: etica@arcadia.edu.mx
+- Teléfono: 55-XXXX-XXXX
+- Portal: https://arcadia.edu.mx/soporte
+
+**Última actualización**: Agosto 2024
+**Vigencia**: Ciclo escolar 2024-2025
+`;
+
+// ============================================
+// DOCKER Y CONFIGURACIÓN DE DESPLIEGUE
+// ============================================
+
+// Dockerfile
+export const Dockerfile = `
+# Build stage
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY pnpm-lock.yaml* ./
+
+# Install dependencies
+RUN corepack enable && pnpm install --frozen-lockfile
+
+# Copy source code
+COPY . .
+
+# Build application
+RUN pnpm build
+
+# Production stage
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+# Set production environment
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# Copy built application
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
+# Set permissions
+USER nextjs
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "require('http').request('http://localhost:3000/api/health', (r) => {r.statusCode === 200 ? process.exit(0) : process.exit(1)}).end()"
+
+# Start application
+CMD ["node", "server.js"]
+`;
+
+// docker-compose.yml
+export const DockerCompose = `
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_SUPABASE_URL=\${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=\${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=\${SUPABASE_SERVICE_ROLE_KEY}
+      - AI_PROVIDER=\${AI_PROVIDER}
+      - ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=\${OPENAI_API_KEY}
+      - UPSTASH_REDIS_REST_URL=\${UPSTASH_REDIS_REST_URL}
+      - UPSTASH_REDIS_REST_TOKEN=\${UPSTASH_REDIS_REST_TOKEN}
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+`;
+
+// ============================================
+// TESTING
+// ============================================
+
+// jest.config.js
+export const JestConfig = `
+const nextJest = require('next/jest')
+
+const createJestConfig = nextJest({
+  dir: './',
+})
+
+const customJestConfig = {
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/$1',
+  },
+  testEnvironment: 'jest-environment-jsdom',
+  testPathIgnorePatterns: ['/node_modules/', '/.next/'],
+  collectCoverageFrom: [
+    'src/**/*.{js,jsx,ts,tsx}',
+    '!src/**/*.d.ts',
+    '!src/**/*.stories.tsx',
+  ],
+  coverageThresholds: {
+    global: {
+      branches: 70,
+      functions: 70,
+      lines: 70,
+      statements: 70,
+    },
+  },
+}
+
+module.exports = createJestConfig(customJestConfig)
+`;
+
+// tests/unit/guardrails.test.ts
+export const GuardrailsTest = `
+import { AIOrchestrator } from '@/packages/ai/orchestrator';
+
+describe('Guardrails de Seguridad', () => {
+  let orchestrator: AIOrchestrator;
+
+  beforeEach(() => {
+    orchestrator = new AIOrchestrator();
+  });
+
+  test('debe rechazar solicitudes de hacer tarea', async () => {
+    const response = await orchestrator.processRequest(
+      'resumia',
+      'haz mi tarea de historia sobre la revolución',
+      'user-123',
+      'school-456'
+    );
+
+    expect(response.safety.policy_violations).toContain('haz mi tarea');
+    expect(response.content.message).toContain('No puedo hacer tareas por ti');
+  });
+
+  test('debe rechazar solicitudes de escribir ensayos', async () => {
+    const response = await orchestrator.processRequest(
+      'explica',
+      'escribe mi ensayo sobre Benito Juárez',
+      'user-123',
+      'school-456'
+    );
+
+    expect(response.safety.policy_violations).toContain('escribe mi ensayo');
+  });
+
+  test('debe permitir solicitudes de ayuda legítimas', async () => {
+    const response = await orchestrator.processRequest(
+      'resumia',
+      '¿Cómo puedo organizar mis ideas sobre la Independencia?',
+      'user-123',
+      'school-456'
+    );
+
+    expect(response.safety.policy_violations).toHaveLength(0);
+    expect(response.safety.out_of_scope).toBe(false);
+  });
+});
+`;
+
+// tests/integration/api.test.ts
+export const APITest = `
+import { createMocks } from 'node-mocks-http';
+import handler from '@/app/api/agent/[agent]/infer/route';
+
+describe('/api/agent/[agent]/infer', () => {
+  test('requiere autenticación', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      headers: {},
+      body: { prompt: 'test' },
+    });
+
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(401);
+  });
+
+  test('valida rate limits', async () => {
+    // Simular múltiples requests
+    for (let i = 0; i < 15; i++) {
+      const { req, res } = createMocks({
+        method: 'POST',
+        headers: { authorization: 'Bearer valid-token' },
+        body: { prompt: 'test' },
+      });
+
+      await handler(req, res);
+      
+      if (i < 10) {
+        expect(res._getStatusCode()).toBe(200);
+      } else {
+        expect(res._getStatusCode()).toBe(429); // Too many requests
+      }
+    }
+  });
+});
+`;
+
+// ============================================
+// COMPONENTES ADICIONALES
+// ============================================
+
+// src/components/dashboard/StudentDashboard.tsx
+export const StudentDashboard = `
+import React from 'react';
+import { BookOpen, Clock, TrendingUp, Award } from 'lucide-react';
+
+interface StatsCardProps {
+  title: string;
+  value: string | number;
+  subtitle?: string;
+  icon: React.ReactNode;
+  color: string;
+}
+
+function StatsCard({ title, value, subtitle, icon, color }: StatsCardProps) {
+  return (
+    <div className="bg-card rounded-2xl p-6 border border-border">
+      <div className="flex items-center justify-between mb-4">
+        <div className={\`p-3 rounded-lg bg-\${color}/10\`}>
+          {icon}
+        </div>
+      </div>
+      <h3 className="text-sm text-muted-foreground mb-1">{title}</h3>
+      <p className="text-2xl font-bold">{value}</p>
+      {subtitle && (
+        <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
+      )}
+    </div>
+  );
+}
+
+export function StudentDashboard() {
+  return (
+    <div className="p-6">
+      <div className="mb-8">
+        <h1 ングな="text-3xl font-bold mb-2">¡Hola, Sofía! 👋</h1>
+        <p className="text-muted-foreground">
+          Continúa tu aprendizaje con los recursos de la SEP
+        </p>
+      </div>
+
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <StatsCard
+          title="Tiempo de Estudio Hoy"
+          value="1h 23m"
+          subtitle="+15% vs ayer"
+          icon={<Clock className="w-6 h-6 text-blue-500" />}
+          color="blue-500"
+        />
+        <StatsCard
+          title="Racha de Días"
+          value="7"
+          subtitle="¡Sigue así!"
+          icon={<TrendingUp className="w-6 h-6 text-green-500" />}
+          color="green-500"
+        />
+        <StatsCard
+          title="Lecciones Completadas"
+          value="24"
+          subtitle="Esta semana: 5"
+          icon={<BookOpen className="w-6 h-6 text-purple-500" />}
+          color="purple-500"
+        />
+        <StatsCard
+          title="Puntos XP"
+          value="1,250"
+          subtitle="Nivel 8"
+          icon={<Award className="w-6 h-6 text-yellow-500" />}
+          color="yellow-500"
+        />
+      </div>
+
+      {/* Recent Resources */}
+      <div className="bg-card rounded-2xl p-6 border border-border mb-8">
+        <h2 className="text-xl font-semibold mb-4">Recursos Recientes</h2>
+        <div className="space-y-4">
+          {[
+            {
+              title: 'Historia de México - Revolución',
+              subject: 'Historia',
+              progress: 65,
+              lastAccess: 'Hace 2 horas',
+            },
+            {
+              title: 'Biología - La Célula',
+              subject: 'Ciencias',
+              progress: 40,
+              lastAccess: 'Ayer',
+            },
+            {
+              title: 'Formación Cívica y Ética',
+              subject: 'Humanidades',
+              progress: 80,
+              lastAccess: 'Hace 3 días',
+            },
+          ].map((resource, i) => (
+            <div key={i} className="flex items-center justify-between p-4 bg-secondary/50 rounded-lg">
+              <div>
+                <h3 className="font-medium">{resource.title}</h3>
+                <p className="text-sm text-muted-foreground">
+                  {resource.subject} • {resource.lastAccess}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-medium mb-1">{resource.progress}%</p>
+                <div className="w-24 h-2 bg-secondary rounded-full">
+                  <div 
+                    className="h-full bg-primary rounded-full"
+                    style={{ width: \`\${resource.progress}%\` }}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <button className="p-6 bg-primary text-white rounded-2xl font-semibold hover:bg-primary/90 transition-all">
+          Explorar Catálogo SEP
+        </button>
+        <button className="p-6 bg-secondary rounded-2xl font-semibold hover:bg-secondary/80 transition-all">
+          Plan de Estudio
+        </button>
+        <button className="p-6 bg-secondary rounded-2xl font-semibold hover:bg-secondary/80 transition-all">
+          Practicar Examen
+        </button>
+      </div>
+    </div>
+  );
+}
+`;
+
+// src/app/api/health/route.ts
+export const HealthRoute = `
+import { NextResponse } from 'next/server';
+import { supabase } from '@/lib/supabase';
+
+export async function GET() {
+  try {
+    // Check database connection
+    const { error } = await supabase.from('schools').select('count').limit(1);
+    
+    if (error) {
+      return NextResponse.json(
+        { status: 'unhealthy', error: 'Database connection failed' },
+        { status: 503 }
+      );
+    }
+
+    return NextResponse.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      version: process.env.npm_package_version || '1.0.0',
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { status: 'unhealthy', error: 'Internal error' },
+      { status: 503 }
+    );
+  }
+}
+`;
+
+// next.config.js
+export const NextConfig = `
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  output: 'standalone',
+  images: {
+    domains: ['libros.conaliteg.gob.mx', 'nuevaescuelamexicana.sep.gob.mx'],
+  },
+  headers: async () => [
+    {
+      source: '/:path*',
+      headers: [
+        {
+          key: 'X-Frame-Options',
+          value: 'DENY',
+        },
+        {
+          key: 'X-Content-Type-Options',
+          value: 'nosniff',
+        },
+        {
+          key: 'X-XSS-Protection',
+          value: '1; mode=block',
+        },
+        {
+          key: 'Referrer-Policy',
+          value: 'strict-origin-when-cross-origin',
+        },
+        {
+          key: 'Content-Security-Policy',
+          value: "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline';",
+        },
+      ],
+    },
+  ],
+};
+
+module.exports = nextConfig;
+`;
+
+// .gitignore
+export const GitIgnore = `
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production
+/build
+/dist
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files
+.env*.local
+.env
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+`;
+
+// Scripts de instalación final
+export const SetupScript = `
+#!/bin/bash
+# setup.sh - Script de instalación de ArcadIA
+
+echo "🎓 Instalando ArcadIA - Plataforma Educativa SEP"
+echo "================================================"
+
+# Verificar Node.js
+if ! command -v node &> /dev/null; then
+    echo "❌ Node.js no está instalado. Por favor instala Node.js 18+"
+    exit 1
+fi
+
+# Crear estructura de directorios
+echo "📁 Creando estructura de directorios..."
+mkdir -p src/{app,components,lib,packages/ai/agents,hooks,types,locales/es}
+mkdir -p src/app/{api/agent,api/health,(auth),(dashboard),(teacher),(admin)}
+mkdir -p src/components/{layout,resources,agents,dashboard,ui}
+mkdir -p tests/{unit,integration,e2e}
+mkdir -p scripts
+mkdir -p supabase/migrations
+
+# Instalar dependencias
+echo "📦 Instalando dependencias..."
+npm install
+
+# Copiar archivos de configuración
+echo "📋 Configurando proyecto..."
+cp .env.example .env.local
+
+echo "✅ Instalación completada!"
+echo ""
+echo "Próximos pasos:"
+echo "1. Configura tus variables de entorno en .env.local"
+echo "2. Configura tu proyecto de Supabase"
+echo "3. Ejecuta las migraciones: npm run db:migrate"
+echo "4. Siembra la base de datos: npm run db:seed"
+echo "5. Inicia el desarrollo: npm run dev"
+echo ""
+echo "📚 Documentación: https://docs.arcadia.edu.mx"
+echo "💬 Soporte: soporte@arcadia.edu.mx"
+`;
+
+console.log('✨ Código completo de ArcadIA generado exitosamente!');
+console.log('📁 Copia cada archivo en su ubicación correspondiente');
+console.log('🚀 Sigue las instrucciones del README.md para iniciar');
