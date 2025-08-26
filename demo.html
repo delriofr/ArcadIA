@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo - ArcadIA</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <h1>ArcadIA Demo</h1>
+            </div>
+            <nav class="nav">
+                <a href="index.html">← Volver al Inicio</a>
+            </nav>
+        </header>
+
+        <div class="guardrails-banner">
+            ⚡ La IA no entrega tareas; te guía paso a paso
+        </div>
+
+        <section class="demo-section">
+            <div class="demo-grid">
+                <!-- Left: Resource Viewer -->
+                <div class="resource-viewer">
+                    <h2>📖 Recurso SEP</h2>
+                    <div class="resource-content">
+                        <h3>Historia de México - Revolución Mexicana</h3>
+                        <div class="resource-meta">
+                            <span>Fuente: SEP</span>
+                            <span>Bloque 2</span>
+                            <span>Unidad 3</span>
+                        </div>
+                        <p class="resource-text">
+                            La Revolución Mexicana fue un conflicto armado que inició en 1910 
+                            con un levantamiento encabezado por Francisco I. Madero contra el 
+                            presidente Porfirio Díaz. Se caracterizó por varios movimientos 
+                            socialistas, liberales, anarquistas, populistas y agrarios.
+                        </p>
+                        <p class="resource-text">
+                            Los principales líderes incluyeron a Emiliano Zapata en el sur, 
+                            quien luchaba por "Tierra y Libertad", y Francisco "Pancho" Villa 
+                            en el norte. El conflicto transformó las estructuras políticas y 
+                            sociales de México.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Right: AI Assistant -->
+                <div class="ai-assistant">
+                    <h2>🤖 Asistente IA</h2>
+                    
+                    <!-- Agent Selector -->
+                    <div class="agent-selector">
+                        <label>Selecciona un agente educativo:</label>
+                        <select id="agentSelect">
+                            <option value="resumia">📘 ResumIA - Guía para resúmenes</option>
+                            <option value="claves">🔑 Claves - Conceptos fundamentales</option>
+                            <option value="destaca">✨ Destaca - Información importante</option>
+                            <option value="planifica">📅 Planifica - Organiza tu estudio</option>
+                            <option value="evalua">🧪 Evalúa - Autoevaluación</option>
+                            <option value="explica">💡 Explica - Clarifica conceptos</option>
+                            <option value="inspira">🚀 Inspira - Proyectos creativos</option>
+                        </select>
+                    </div>
+
+                    <!-- Chat Interface -->
+                    <div class="chat-container">
+                        <div id="chatMessages" class="chat-messages">
+                            <div class="message ai-message">
+                                ¡Hola! Soy tu asistente educativo. Estoy aquí para guiarte en tu aprendizaje sobre la Revolución Mexicana. ¿Qué te gustaría explorar?
+                            </div>
+                        </div>
+
+                        <div class="chat-input-container">
+                            <textarea 
+                                id="userInput" 
+                                placeholder="Escribe tu pregunta aquí..."
+                                rows="3"
+                            ></textarea>
+                            <button id="sendBtn" class="btn btn-primary">Enviar</button>
+                        </div>
+                    </div>
+
+                    <!-- Quick Actions -->
+                    <div class="quick-actions">
+                        <button class="quick-btn" onclick="askQuestion('¿Cómo puedo organizar las causas?')">
+                            ¿Cómo organizar las causas?
+                        </button>
+                        <button class="quick-btn" onclick="askQuestion('¿Cuáles fueron los personajes clave?')">
+                            Personajes principales
+                        </button>
+                        <button class="quick-btn" onclick="askQuestion('¿Qué consecuencias tuvo?')">
+                            Consecuencias
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
