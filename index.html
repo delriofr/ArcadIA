@@ -3,102 +3,148 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ArcadIA - Educación Inteligente</title>
-    <style>
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: white;
-            min-height: 100vh;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        .header {
-            text-align: center;
-            padding: 60px 20px;
-        }
-        h1 {
-            font-size: 60px;
-            margin: 0;
-        }
-        .subtitle {
-            font-size: 24px;
-            color: #4ade80;
-            margin: 20px 0;
-        }
-        .guardrails {
-            background: rgba(34, 197, 94, 0.2);
-            border: 2px solid #22c55e;
-            border-radius: 10px;
-            padding: 20px;
-            text-align: center;
-            margin: 40px auto;
-            max-width: 600px;
-        }
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin: 40px 0;
-        }
-        .feature-card {
-            background: rgba(255,255,255,0.1);
-            border-radius: 10px;
-            padding: 20px;
-            text-align: center;
-        }
-        .demo-button {
-            background: #22c55e;
-            color: white;
-            border: none;
-            padding: 15px 40px;
-            font-size: 18px;
-            border-radius: 25px;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-block;
-            margin: 20px;
-        }
-        .demo-button:hover {
-            background: #16a34a;
-        }
-    </style>
+    <title>ArcadIA - Plataforma Educativa SEP con IA</title>
+    <meta name="description" content="Plataforma educativa 100% alineada al currículo SEP con IA que guía el aprendizaje sin hacer tareas">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/components.css">
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>ArcadIA</h1>
-            <p class="subtitle">Plataforma Educativa Inteligente para México</p>
-            <p>100% Alineada al currículo SEP</p>
-            <a href="demo.html" class="demo-button">Ver Demo</a>
-        </div>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="container">
+                <div class="header-content">
+                    <div class="logo">
+                        <h1 class="logo-text">ArcadIA</h1>
+                        <span class="logo-tagline">Educación Inteligente SEP</span>
+                    </div>
+                    <nav class="nav-menu">
+                        <a href="#inicio">Inicio</a>
+                        <a href="pages/demo.html">Demo</a>
+                        <a href="pages/resources.html">Recursos SEP</a>
+                        <a href="pages/dashboard.html">Dashboard</a>
+                    </nav>
+                    <button class="mobile-menu-toggle" aria-label="Menu">☰</button>
+                </div>
+            </div>
+        </header>
 
-        <div class="guardrails">
-            <p style="font-size: 20px;">⚡ La IA no entrega tareas; te guía paso a paso</p>
-        </div>
+        <!-- Hero Section -->
+        <section class="hero">
+            <div class="container">
+                <div class="hero-content">
+                    <h2 class="hero-title gradient-text">
+                        Aprende con IA Responsable
+                    </h2>
+                    <p class="hero-description">
+                        Plataforma 100% alineada al currículo de la SEP. 
+                        Recursos oficiales verificados. La IA te guía paso a paso.
+                    </p>
+                    
+                    <!-- Guardrails Banner -->
+                    <div class="guardrails-banner">
+                        <span class="guardrails-icon">⚡</span>
+                        <span>La IA no entrega tareas; te guía paso a paso</span>
+                    </div>
 
-        <div class="features">
-            <div class="feature-card">
-                <h3>📚 Recursos SEP</h3>
-                <p>Libros de texto gratuitos y material oficial</p>
+                    <div class="hero-buttons">
+                        <a href="pages/demo.html" class="btn btn-primary">
+                            Prueba el Demo Interactivo
+                        </a>
+                        <a href="pages/dashboard.html" class="btn btn-secondary">
+                            Acceder al Dashboard
+                        </a>
+                    </div>
+
+                    <!-- SEP Badge -->
+                    <div class="sep-badge">
+                        <span class="badge-icon">✓</span>
+                        <span>Alineado a SEP · Sin subir archivos</span>
+                    </div>
+                </div>
             </div>
-            <div class="feature-card">
-                <h3>🤖 7 Agentes IA</h3>
-                <p>Asistentes que guían sin dar respuestas</p>
+        </section>
+
+        <!-- Features Grid -->
+        <section class="features">
+            <div class="container">
+                <h2 class="section-title">Características Principales</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">📚</div>
+                        <h3>Recursos SEP Oficiales</h3>
+                        <p>Acceso directo a libros de texto gratuitos, Nueva Escuela Mexicana y Caja de Herramientas</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🤖</div>
+                        <h3>7 Agentes Educativos</h3>
+                        <p>ResumIA, Claves, Destaca, Planifica, Evalúa, Explica e Inspira - cada uno con pedagogía específica</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🔒</div>
+                        <h3>Seguro y Privado</h3>
+                        <p>Cumplimiento LFPDPPP, datos en México, auditoría completa de interacciones</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">📊</div>
+                        <h3>Progreso Medible</h3>
+                        <p>Seguimiento de aprendizajes esperados según fases y campos formativos SEP</p>
+                    </div>
+                </div>
             </div>
-            <div class="feature-card">
-                <h3>🔒 Seguro</h3>
-                <p>Cumple leyes mexicanas de privacidad</p>
+        </section>
+
+        <!-- Agents Section -->
+        <section class="agents-section">
+            <div class="container">
+                <h2 class="section-title">Mini-Agentes Educativos</h2>
+                <div class="agents-grid" id="agentsGrid">
+                    <!-- Agents will be loaded from JSON -->
+                </div>
             </div>
-            <div class="feature-card">
-                <h3>📈 Progreso</h3>
-                <p>Seguimiento de aprendizajes esperados</p>
+        </section>
+
+        <!-- Resources Section -->
+        <section class="resources-section">
+            <div class="container">
+                <h2 class="section-title">Recursos SEP Verificados</h2>
+                <div class="resources-grid" id="resourcesGrid">
+                    <!-- Resources will be loaded from JSON -->
+                </div>
             </div>
-        </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="container">
+                <div class="footer-content">
+                    <div class="footer-section">
+                        <h4>ArcadIA</h4>
+                        <p>Plataforma educativa con IA alineada al currículo mexicano</p>
+                    </div>
+                    <div class="footer-section">
+                        <h4>Recursos Oficiales</h4>
+                        <ul>
+                            <li><a href="https://nuevaescuelamexicana.sep.gob.mx/">Nueva Escuela Mexicana</a></li>
+                            <li><a href="https://libros.conaliteg.gob.mx/">Libros de Texto</a></li>
+                            <li><a href="https://educacionbasica.sep.gob.mx/">Educación Básica SEP</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-section">
+                        <h4>Política</h4>
+                        <p>Cumplimiento LFPDPPP<br>
+                        Datos seguros en México<br>
+                        Sin compartir información</p>
+                    </div>
+                </div>
+                <div class="footer-bottom">
+                    <p>&copy; 2024 ArcadIA. Desarrollado para estudiantes mexicanos.</p>
+                </div>
+            </div>
+        </footer>
     </div>
+
+    <script src="js/app.js"></script>
+    <script src="js/resources.js"></script>
 </body>
 </html>
